@@ -1,169 +1,213 @@
 name: Build VideoHub APK
 
 on:
+  workflow_dispatch:
+
   push:
     branches:
       - main
       - master
 
-  workflow_dispatch:
-
 permissions:
   contents: read
 
 jobs:
-  build-apk:
-    name: Extract and Build APK
+  build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
 
-      # ==========================================
-      # 1. Checkout GitHub Repository
-      # ==========================================
-      - name: Checkout repository
+      # ----------------------------------------
+      # 1. Checkout repository
+      # ----------------------------------------
+      - name: Checkout
         uses: actions/checkout@v4
 
 
-      # ==========================================
-      # 2. Install Java
-      # ==========================================
-      # مهم:
-      # اینجا Gradle cache را فعال نمی‌کنیم،
-      # چون پروژه فعلاً داخل ZIP است.
-      # ==========================================
-      - name: Setup JDK 17
+      # ----------------------------------------
+      # 2. Java 17
+      # ----------------------------------------
+      - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
 
-      # ==========================================
-      # 3. Setup Android SDK
-      # ==========================================
+      # ----------------------------------------
+      # 3. Android SDK
+      # ----------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
 
-      # ==========================================
-      # 4. Install Android SDK
-      # ==========================================
+      # ----------------------------------------
+      # 4. Accept Android SDK licenses
+      # ----------------------------------------
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+
+
+      # ----------------------------------------
+      # 5. Install required Android SDK
+      # ----------------------------------------
       - name: Install Android SDK packages
         shell: bash
         run: |
-          set -e
+          set -eux
 
-          yes | sdkmanager --licenses || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-36"
-          sdkmanager "build-tools;36.0.0"
+          yes | sdkmanager --licenses > /dev/null || true
 
 
-      # ==========================================
-      # 5. Find ZIP
-      # ==========================================
+      # ----------------------------------------
+      # 6. Find ZIP
+      # ----------------------------------------
       - name: Find VideoHub ZIP
         shell: bash
         run: |
-          set -e
+          set -eux
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
+          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
             -maxdepth 2 \
             -type f \
-            -name "*.zip" \
-            | head -n 1)"
+            -iname "*.zip" \
+            -print \
+            -quit)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
           echo "Found ZIP:"
           echo "$ZIP_FILE"
 
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      # ==========================================
-      # 6. Extract ZIP
-      # ==========================================
-      - name: Extract VideoHub project
+
+      # ----------------------------------------
+      # 7. Extract ZIP
+      # ----------------------------------------
+      - name: Extract VideoHub
         shell: bash
         run: |
-          set -e
+          set -eux
 
           rm -rf "$GITHUB_WORKSPACE/.build"
 
           mkdir -p "$GITHUB_WORKSPACE/.build/project"
 
-          unzip -q "$ZIP_FILE" \
+          unzip -o "$ZIP_FILE" \
             -d "$GITHUB_WORKSPACE/.build/project"
 
-          echo "Extracted project:"
+          echo ""
+          echo "Extracted files:"
           find "$GITHUB_WORKSPACE/.build/project" \
             -maxdepth 3 \
             -type f \
             | sort
 
 
-      # ==========================================
-      # 7. Find Gradle Project
-      # ==========================================
+      # ----------------------------------------
+      # 8. Locate Gradle project
+      # ----------------------------------------
       - name: Detect Gradle project
         shell: bash
         run: |
-          set -e
+          set -eux
 
-          SETTINGS_FILE="$(
-            find "$GITHUB_WORKSPACE/.build/project" \
-              -type f \
-              -name "settings.gradle.kts" \
-              -print \
-              -quit
-          )"
+          SETTINGS_FILE=$(find \
+            "$GITHUB_WORKSPACE/.build/project" \
+            -type f \
+            -name "settings.gradle.kts" \
+            -print \
+            -quit)
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle.kts not found."
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project detected:"
+          echo ""
+          echo "Gradle project:"
           echo "$PROJECT_DIR"
 
+
+      # ----------------------------------------
+      # 9. Show project configuration
+      # ----------------------------------------
+      - name: Show Gradle configuration
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          echo "===== settings.gradle.kts ====="
+          cat settings.gradle.kts
+
           echo ""
-          echo "Project structure:"
-          find "$PROJECT_DIR" \
-            -maxdepth 2 \
-            -type f \
-            | sort
+          echo "===== build.gradle.kts ====="
+          cat build.gradle.kts
+
+          echo ""
+          echo "===== app/build.gradle.kts ====="
+          cat app/build.gradle.kts
+
+          echo ""
+          echo "===== gradle-wrapper.properties ====="
+
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            cat gradle/wrapper/gradle-wrapper.properties
+          else
+            echo "No Gradle wrapper properties found."
+          fi
 
 
-      # ==========================================
-      # 8. Setup Gradle
-      # ==========================================
-      # Gradle version موجود در پروژه:
-      # 9.3.1
-      # ==========================================
-      - name: Setup Gradle
+      # ----------------------------------------
+      # 10. Setup Gradle
+      # ----------------------------------------
+      - name: Setup Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
 
-      # ==========================================
-      # 9. Create Debug Keystore
-      # ==========================================
+      # ----------------------------------------
+      # 11. Create Gradle properties
+      # ----------------------------------------
+      - name: Configure Gradle
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.gradle"
+
+          cat > "$HOME/.gradle/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+          org.gradle.daemon=false
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+
+      # ----------------------------------------
+      # 12. Create debug keystore
+      # ----------------------------------------
       - name: Create debug keystore
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -eux
 
           if [ ! -f debug.keystore ]; then
 
@@ -181,92 +225,76 @@ jobs:
 
           fi
 
-          echo "Debug keystore ready."
 
-
-      # ==========================================
-      # 10. Configure Gradle
-      # ==========================================
-      - name: Configure Gradle
+      # ----------------------------------------
+      # 13. Check Java / Gradle / SDK
+      # ----------------------------------------
+      - name: Environment information
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
+          echo "===== JAVA ====="
+          java -version
 
-          mkdir -p "$HOME/.gradle"
-
-          cat > "$HOME/.gradle/gradle.properties" <<'EOF'
-
-          org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
-
-          org.gradle.daemon=false
-
-          org.gradle.parallel=true
-
-          org.gradle.caching=true
-
-          android.useAndroidX=true
-
-          android.nonTransitiveRClass=true
-
-          EOF
-
-
-      # ==========================================
-      # 11. Check Gradle
-      # ==========================================
-      - name: Check Gradle
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
+          echo ""
+          echo "===== GRADLE ====="
           gradle --version
 
+          echo ""
+          echo "===== ANDROID SDK ====="
+          sdkmanager --list_installed || true
 
-      # ==========================================
-      # 12. Run Unit Tests
-      # ==========================================
+          echo ""
+          echo "===== SDK ROOT ====="
+          echo "$ANDROID_HOME"
+
+
+      # ----------------------------------------
+      # 14. Run unit tests
+      # ----------------------------------------
       - name: Run unit tests
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
           gradle test \
-            --stacktrace \
-            --no-daemon
+            --no-daemon \
+            --stacktrace
 
 
-      # ==========================================
-      # 13. Build Debug APK
-      # ==========================================
+      # ----------------------------------------
+      # 15. Build Debug APK
+      # ----------------------------------------
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
-
           gradle assembleDebug \
+            --no-daemon \
             --stacktrace \
-            --no-daemon
+            --info
 
 
-      # ==========================================
-      # 14. Find APK
-      # ==========================================
-      - name: Find generated APK
+      # ----------------------------------------
+      # 16. Find APK
+      # ----------------------------------------
+      - name: Find APK
         shell: bash
         run: |
-          set -e
+          set -eux
 
-          echo "Searching for generated APK..."
+          echo "Searching for APK..."
 
-          find "$PROJECT_DIR" \
+          find "$GITHUB_WORKSPACE/.build/project" \
             -type f \
             -name "*.apk" \
             -print
 
-          APK_FILE="$(
-            find "$PROJECT_DIR" \
-              -type f \
-              -path "*/build/outputs/apk/debug/*.apk" \
-              -print \
-              -quit
-          )"
+          APK_FILE=$(find \
+            "$GITHUB_WORKSPACE/.build/project" \
+            -type f \
+            -path "*/build/outputs/apk/debug/*.apk" \
+            -print \
+            -quit)
 
           if [ -z "$APK_FILE" ]; then
             echo "ERROR: APK was not generated."
@@ -280,13 +308,13 @@ jobs:
           echo "$APK_FILE"
 
 
-      # ==========================================
-      # 15. Prepare APK
-      # ==========================================
+      # ----------------------------------------
+      # 17. Prepare release folder
+      # ----------------------------------------
       - name: Prepare APK
         shell: bash
         run: |
-          set -e
+          set -eux
 
           mkdir -p "$GITHUB_WORKSPACE/release"
 
@@ -297,9 +325,9 @@ jobs:
             "$GITHUB_WORKSPACE/release/VideoHub-debug.apk"
 
 
-      # ==========================================
-      # 16. Upload APK Artifact
-      # ==========================================
+      # ----------------------------------------
+      # 18. Upload APK
+      # ----------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
